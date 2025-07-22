@@ -1,4 +1,4 @@
-# ✅ Fix missing asyncio event loop (Windows only issue sometimes)
+# ✅ Fix missing asyncio event loop (Windows-only issue)
 import asyncio
 try:
     asyncio.get_running_loop()
@@ -6,30 +6,33 @@ except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-# ✅ Import Libraries
+# ✅ Imports
 import os
+import json
+import re
+import tempfile
 import streamlit as st
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from langchain.vectorstores import FAISS
 from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.schema import Document
-import json
-import tempfile
-import re
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain.memory import ConversationBufferMemory
+from langchain_community.tools.tavily_search import TavilySearchResults
 
-# ✅ Load API keys from Streamlit secrets
+# ✅ Load API Keys
 api_key = st.secrets["GOOGLE_API_KEY"]
-tavily_api_key = st.secrets["TAVILY_API_KEY"]
-os.environ["TAVILY_API_KEY"] = tavily_api_key  # ✅ Add here globally once
+tavily_key = st.secrets["TAVILY_API_KEY"]
+os.environ["TAVILY_API_KEY"] = tavily_key
 
-# ✅ Initialize LLM and Embeddings
+# ✅ Initialize Models
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-exp-03-07")
 
-# ✅ Global Prompt Templates
+# ✅ Prompt Templates
 extract_prompt = PromptTemplate(
     input_variables=["doc_text"],
     template="""
@@ -68,38 +71,37 @@ Just respond in plain text.
 """
 )
 
-# ✅ Create LLM Chains
+# ✅ Chains
 extract_chain = LLMChain(llm=llm, prompt=extract_prompt)
 eligibility_chain = LLMChain(llm=llm, prompt=eligibility_prompt)
 
-# ✅ Extract PDF Text
+# ✅ Function: PDF to Text
 def extract_pdf_text(file_path):
     loader = PyPDFLoader(file_path)
     pages = loader.load()
     return "\n\n".join([p.page_content for p in pages])
 
-# ✅ Extract User Info as JSON
-def extract_user_info(doc_text: str) -> dict:
+# ✅ Function: Extract User Info
+def extract_user_info(doc_text):
     result = extract_chain.run(doc_text=doc_text)
     cleaned = re.sub(r"```json|```", "", result).strip()
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError:
+    except:
         return {"error": "Invalid JSON", "raw_output": result}
 
-# ✅ Match User Eligibility with Scheme Text
-def match_eligibility(user_data: dict, scheme_text: str) -> str:
+# ✅ Function: Check Eligibility
+def match_eligibility(user_data, scheme_text):
     return eligibility_chain.run(
         user_data=json.dumps(user_data),
         scheme_text=scheme_text
     )
 
-# ✅ Build Vector DB (only runs if needed)
+# ✅ Build Vector DB if not exists
 def build_vector_db_from_text():
-    file_path = r"C:\\Users\\aditya mane\\Downloads\\govt_schemes.txt"
-
+    file_path = "govt_schemes.txt"  # ✅ Use full path if needed
     if not os.path.exists(file_path):
-        raise FileNotFoundError("⚠️ govt_schemes.txt not found at: " + file_path)
+        raise FileNotFoundError("⚠️ govt_schemes.txt not found.")
 
     with open(file_path, "r", encoding="utf-8") as file:
         data = file.read()
@@ -114,94 +116,59 @@ def build_vector_db_from_text():
 
     vectordb = FAISS.from_documents(documents, embeddings)
     vectordb.save_local("govt_schemes_index")
-    print("✅ Vector store built and saved locally.")
 
-# ✅ Load or Build Vector Store
+# ✅ Load Vector DB
 def load_vector_db():
     if not os.path.exists("govt_schemes_index/index.faiss"):
-        print("⚠️ Vector store not found. Building from text...")
         build_vector_db_from_text()
-
     return FAISS.load_local("govt_schemes_index", embeddings, allow_dangerous_deserialization=True)
 
-# ✅ Load the vector DB (This is where your error happened)
-vectordb = load_vector_db()
-# ---------------------- ✅ Streamlit App UI --------------------------
-st.set_page_config(page_title="Scheme Eligibility Checker", page_icon="🗞")
+# ✅ Streamlit UI Starts Here
+st.set_page_config(page_title="Scheme Eligibility Checker", page_icon="📋")
 st.title("🗞 Government Scheme Eligibility Checker")
 
-uploaded_file = st.file_uploader("Upload your PDF with personal info", type=["pdf"])
+uploaded_file = st.file_uploader("📤 Upload your PDF with personal info", type=["pdf"])
 
 if uploaded_file and "user_data" not in st.session_state:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
         temp_pdf.write(uploaded_file.read())
-        temp_pdf_path = temp_pdf.name
+        temp_path = temp_pdf.name
 
     st.success("✅ PDF uploaded successfully.")
-
-    # Step 1: Extract Text
-    with st.spinner("📄 Extracting text from PDF..."):
-        doc_text = extract_pdf_text(temp_pdf_path)
+    with st.spinner("📄 Extracting text..."):
+        doc_text = extract_pdf_text(temp_path)
         st.session_state.doc_text = doc_text
-        st.text_area("Extracted Text (preview)", doc_text[:500])
+        st.text_area("Extracted Text", doc_text[:800])
 
-    # Step 2: Extract Info
     user_data = extract_user_info(doc_text)
     st.session_state.user_data = user_data
 
-    # Step 3: Load Vector DB
-    with st.spinner("📚 Loading government schemes..."):
+    with st.spinner("🔍 Loading government schemes..."):
         vectordb = load_vector_db()
         st.session_state.vectordb = vectordb
 
-    # Step 4: Search and Match
-    with st.spinner("✅ Checking eligibility..."):
-        query = f"Schemes for a {user_data.get('age')} year old {user_data.get('caste or category')} from {user_data.get('state')}"
-        results = vectordb.similarity_search(query, k=5)
-        st.session_state.results = results
+    query = f"Schemes for a {user_data.get('age')} year old {user_data.get('caste or category')} from {user_data.get('state')}"
+    results = vectordb.similarity_search(query, k=5)
+    st.session_state.results = results
 
-    # ✅ Display Eligibility Results
-    st.subheader("📋 Eligible Schemes")
+    st.subheader("📋 Eligibility Results")
     eligible_count = 0
     for i, r in enumerate(results, start=1):
         title = r.metadata.get("title", f"Scheme #{i}")
         eligibility = match_eligibility(user_data, r.page_content)
 
-        st.markdown(f"### 🏩 {title}")
+        st.markdown(f"### 🏛️ {title}")
         st.write(eligibility)
 
         if "YES" in eligibility.upper():
             eligible_count += 1
 
-    st.success(f"🌟 You are eligible for {eligible_count} out of {len(results)} schemes.")
+    st.success(f"🎉 You are eligible for {eligible_count} out of {len(results)} schemes.")
 
-    # ✅ Move chat UI here (below columns)
+# ✅ Chat Assistant with Fallback to Tavily Search
+if "user_data" in st.session_state:
     st.markdown("---")
     st.subheader("💬 Ask About Eligible Schemes")
-
-    from langchain_core.messages import HumanMessage, AIMessage
-    from langchain.memory import ConversationBufferMemory
-    from langchain_community.tools.tavily_search import TavilySearchResults
-
-    memory = ConversationBufferMemory(return_messages=True)
-    search_tool = TavilySearchResults(k=3)
-
-    def answer_user_query(query, chat_history):
-        chat_history.append(HumanMessage(content=query))
-        try:
-            response = llm.invoke(chat_history)
-            content = response.content
-
-            if "I don't know" in content or "not sure" in content.lower():
-                results = search_tool.invoke({"query": query})
-                fallback = "\n\n🔍 I searched the web and found:\n"
-                for i, res in enumerate(results, 1):
-                    fallback += f"{i}. [{res['title']}]({res['url']})\n"
-                return content + fallback
-
-            return content
-        except Exception as e:
-            return f"❌ Error: {e}"
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
@@ -214,9 +181,34 @@ if uploaded_file and "user_data" not in st.session_state:
         else:
             st.chat_message("ai").write(msg.content)
 
-    user_query = st.chat_input("Ask a question about the schemes...")
+    user_query = st.chat_input("Type your question here...")
+
     if user_query:
         st.chat_message("user").write(user_query)
-        reply = answer_user_query(user_query, st.session_state.chat_history)
-        st.session_state.chat_history.append(AIMessage(content=reply))
-        st.chat_message("ai").write(reply)
+
+        memory = ConversationBufferMemory(return_messages=True)
+        memory.chat_memory.messages = st.session_state.chat_history
+
+        search_tool = TavilySearchResults(k=3)
+        chat_history = memory.chat_memory.messages
+        chat_history.append(HumanMessage(content=user_query))
+
+        try:
+            response = llm.invoke(chat_history)
+            content = response.content
+
+            # ✅ Fallback to Tavily Search if model doesn't know
+            if "I don't know" in content or "not sure" in content.lower():
+                search_results = search_tool.invoke({"query": user_query})
+                fallback = "\n\n🔍 I searched the web:\n"
+                for i, res in enumerate(search_results, 1):
+                    fallback += f"{i}. [{res['title']}]({res['url']})\n"
+                content += fallback
+
+            reply = AIMessage(content=content)
+            st.chat_message("ai").write(content)
+            st.session_state.chat_history.append(reply)
+
+        except Exception as e:
+            error_msg = f"❌ Error: {e}"
+            st.chat_message("ai").write(error_msg)
