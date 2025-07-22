@@ -4,3 +4,4 @@ langchain-google-genai
 python-dotenv
 faiss-cpu
 tavily-python
+faiss-cpu
