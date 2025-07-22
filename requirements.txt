@@ -12,3 +12,7 @@ langchain-retrievers
 langchain-chroma    
 langchain-llms
 langchain-prompts
+langchain-community
+langchain==0.3.26
+langchain-google-genai # (assuming you have this already)
+langchain-community
