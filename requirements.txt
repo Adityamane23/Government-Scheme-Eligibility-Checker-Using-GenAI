@@ -6,4 +6,5 @@ google-generativeai
 faiss-cpu
 langchain-openai # If you intend to use OpenAI models as well
 langchain-text-splitters
-langchain-community # As discussed previously for FAISS
+langchain-community
+pypdf
